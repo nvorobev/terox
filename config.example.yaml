@@ -1,0 +1,124 @@
+# terox — пример конфигурации.
+#
+# Копируется в config.yaml, значения заменяются на собственные:
+#     cp config.example.yaml config.yaml
+#
+# Порядок поиска конфига: флаг -c, $TEROX_CONFIG, ./config.yaml,
+# config.yaml рядом с бинарём, затем ~/.config/terox/config.yaml.
+# config.yaml хранится ВНЕ git — содержит пароли (уже в .gitignore).
+# Проверка файла: `terox validate` (выводит ошибки и предупреждения).
+
+# ── Глобальные настройки ──────────────────────────────────────────────────────
+
+write_mode_default: false   # стартовать в read-only; запись включается \write on
+editor: tea                 # редактор ввода: tea (живая выпадашка) | readline
+auto_keymap: true           # авто-конвертация Cyrillic→Latin раскладки (по умолч. вкл.)
+max_rows: 100               # лимит отображаемых строк на запрос (0 = без лимита)
+
+# Стартовые значения интерактивных режимов (каждый переключается своей командой);
+# задаются здесь, чтобы не выставлять их вручную при каждом запуске.
+# timing: true              # показывать длительность запроса (\timing; по умолч. вкл.)
+# impact: false             # превью затрагиваемых строк перед UPDATE/DELETE (\impact; по умолч. выкл.)
+# suggest: true             # inline ghost-автоподсказка (\suggest; по умолч. вкл.)
+# expanded: false           # стартовать в развёрнутом выводе «поле на строку» (\x; по умолч. выкл.)
+
+fanout_mode: parallel       # запрос на все шарды: parallel (все сразу) | sequential (по очереди)
+# fanout_concurrency: 32    # необязательный потолок одновременных шардов в parallel режиме
+
+query_timeout: 5s           # клиентский таймаут на запрос (на каждый шард)
+statement_timeout: 1s       # серверный statement_timeout для чтений и миграций; меняется \timeout
+# lock_timeout: 500ms       # серверный lock_timeout для миграций (необязательно)
+# migration_timeout: 30m    # клиентский дедлайн миграции (0 = только серверный statement_timeout).
+                            # ОБЯЗАТЕЛЕН для non-transactional миграций на prod (CONCURRENTLY/VACUUM).
+
+# write_error_mode: stop    # многошардовая запись при первой ошибке: stop (по умолчанию —
+                            # прерывает остальные шарды) | continue (применяет ко всем, собирает статус)
+# write_approve: true       # спрашивать подтверждение перед записью (false / \write_approve off — отключить)
+
+# allow_insecure_prod: false  # true разрешает prod-кластеру нешифрованный sslmode
+                              # (disable/allow/prefer) на не-loopback хосте — иначе это ОШИБКА конфига.
+
+# ── Кластеры: service → storage → шарды ───────────────────────────────────────
+#
+# host_template / db_template поддерживают плейсхолдеры по позиции шарда p (с нуля):
+#     {p}      -> p           {p1}    -> p+1
+#     {p:03}   -> p, ширина 3  {p1:03} -> p+1, ширина 3 (rs001, rs002, …)
+
+services:
+  shop:                                   # сервис
+    storages:
+
+      sharded:                            # многошардовое prod-хранилище
+        host_template: db-shop-rs{p1:03}.internal   # rs001 … rs128
+        db_template: master
+        port: 6432
+        user: app_ro                      # коннект под наименее привилегированным пользователем
+        password: CHANGE_ME
+        count: 128                        # число шардов
+        sslmode: verify-full              # шифрование + проверка сертификата сервера (рекоменд. для prod)
+        # Профиль подключения (Feature 14): все поля необязательны.
+        # sslrootcert: ~/.postgresql/root.crt   # корневой CA для verify-ca/verify-full (managed CA workflow)
+        # sslcert: ~/.postgresql/client.crt     # клиентский сертификат (mTLS), задаётся в паре с sslkey
+        # sslkey:  ~/.postgresql/client.key
+        # connect_timeout: 5s                   # таймаут установления соединения (в DSN уходит в секундах)
+        # password_env: TEROX_SHOP_PASSWORD     # взять пароль из переменной окружения (не хранить открытым в YAML)
+        # passfile: ~/.pgpass                   # libpq .pgpass: пароль берётся оттуда, если password пуст
+        prod: true                        # prod: красный бейдж в prompt + усиленные подтверждения записи
+        migration_role: app_writer        # writes делают `set local role app_writer`
+                                          # (роль с полными правами записи, НЕ суперпользователь).
+                                          # если не указана — `set role` не выполняется вообще.
+
+      by_db:                              # шардирование по ИМЕНИ БАЗЫ: один хост, шард в db_template
+        host_template: db-shop.internal              # хост фиксированный (без плейсхолдера)
+        db_template: shard_{p1:03}                   # shard_001, shard_002, … shard_016
+        port: 6432
+        user: app_ro
+        password: CHANGE_ME
+        count: 16
+        sslmode: verify-full
+        prod: true
+        migration_role: app_writer
+
+      by_host_and_db:                     # нумерация и в хосте, и в имени базы
+        host_template: db-shop-rs{p1:02}.internal    # rs01 … rs08
+        db_template: shop_{p}                        # shop_0 … shop_7 (с нуля)
+        port: 6432
+        user: app_ro
+        password: CHANGE_ME
+        count: 8
+        sslmode: verify-full
+        prod: true
+        migration_role: app_writer
+
+      single:                             # одиночная (не шардированная) база — count: 1
+        host_template: db-shop-single.internal
+        db_template: shop                            # без плейсхолдера — одно имя базы
+        port: 6432
+        user: app_ro
+        password: CHANGE_ME
+        count: 1
+        sslmode: verify-full
+        prod: true
+        migration_role: app_writer
+
+      staging:                            # staging: без роли записи, не prod
+        host_template: db-shop-staging.internal
+        db_template: shop
+        port: 6432
+        user: app_rw
+        password: CHANGE_ME
+        count: 1
+        sslmode: require                  # require шифрует, но НЕ проверяет сертификат (возможен MITM)
+        prod: false
+        # migration_role не задан → запись идёт под app_rw, без set role
+
+  local:                                  # локальная тестовая БД (docker + pgbouncer)
+    storages:
+      dev:
+        host_template: 127.0.0.1
+        db_template: shard_{p}            # shard_0, shard_1
+        port: 6432
+        user: dev
+        password: dev
+        count: 2
+        prod: false                       # loopback + не-prod → sslmode можно опустить (disable)
