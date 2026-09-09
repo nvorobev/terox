@@ -71,6 +71,24 @@ func TestContextSnapshotRestoresWriteMode(t *testing.T) {
 	}
 }
 
+func TestWriteIsTheOnlyWriteModeCommand(t *testing.T) {
+	r := &REPL{out: &bytes.Buffer{}}
+	if _, err := r.runMeta("\\write_approve off"); err == nil || !strings.Contains(err.Error(), "unknown command") {
+		t.Fatalf("removed \\write_approve must be rejected as unknown, got %v", err)
+	}
+	if quit, err := r.runMeta("\\write on"); err != nil || quit || !r.writeMode {
+		t.Fatalf("\\write on must remain functional: quit=%v err=%v mode=%v", quit, err, r.writeMode)
+	}
+	for _, command := range metaCommands {
+		if command == "\\write_approve" {
+			t.Fatal("removed \\write_approve still appears in completion")
+		}
+	}
+	if lookupHelp("write_approve") != nil {
+		t.Fatal("removed \\write_approve still appears in help")
+	}
+}
+
 func TestBuildPerShard(t *testing.T) {
 	results := []db.ShardResult{
 		{Shard: cluster.Shard{Position: 0, Label: "rs001"}, Result: &db.Result{Columns: []string{"id"}, Rows: [][]any{{int64(1)}}, IsSelect: true}},

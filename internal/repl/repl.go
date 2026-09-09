@@ -65,7 +65,7 @@ type REPL struct {
 	// конфига, переопределяется через \timeout. Всегда виден в строке статуса.
 	stmtTimeout string
 	// prod — флаг прод-окружения текущего хранилища (управляет бейджем prod в
-	// приглашении и дополнительными подтверждениями/предупреждениями при записи,
+	// приглашении и дополнительными PROD-предупреждениями/барьерами при записи,
 	// НЕ ролью записи).
 	prod bool
 	// migrationRole — настроенная роль записи текущего хранилища
@@ -76,9 +76,6 @@ type REPL struct {
 	expanded bool
 	// impact управляет предпросмотром числа затрагиваемых строк перед записью (по умолчанию выкл).
 	impact bool
-	// writeApprove управляет запросом подтверждения перед записью (по умолчанию вкл;
-	// отключается командой \write_approve off).
-	writeApprove bool
 	// suggest управляет встроенной призрачной подсказкой (по умолчанию вкл).
 	suggest bool
 	// showSystemCatalog включает объекты pg_catalog/information_schema в
@@ -185,21 +182,20 @@ func New(cfg *config.Config) (*REPL, error) {
 	}
 
 	r := &REPL{
-		cfg:          cfg,
-		mgr:          db.NewManager(),
-		rl:           rl,
-		out:          os.Stdout,
-		writeMode:    cfg.WriteModeDefault,
-		maxRows:      cfg.MaxRowsValue(),
-		stmtTimeout:  cfg.StatementTimeout,
-		timing:       cfg.TimingEnabled(),
-		impact:       cfg.ImpactEnabled(),
-		suggest:      cfg.SuggestEnabled(),
-		expanded:     cfg.ExpandedDefault(),
-		writeApprove: cfg.WriteApproveEnabled(),
-		queries:      queries,
-		applied:      applied,
-		now:          func() string { return time.Now().Format("2006-01-02 15:04:05") },
+		cfg:         cfg,
+		mgr:         db.NewManager(),
+		rl:          rl,
+		out:         os.Stdout,
+		writeMode:   cfg.WriteModeDefault,
+		maxRows:     cfg.MaxRowsValue(),
+		stmtTimeout: cfg.StatementTimeout,
+		timing:      cfg.TimingEnabled(),
+		impact:      cfg.ImpactEnabled(),
+		suggest:     cfg.SuggestEnabled(),
+		expanded:    cfg.ExpandedDefault(),
+		queries:     queries,
+		applied:     applied,
+		now:         func() string { return time.Now().Format("2006-01-02 15:04:05") },
 	}
 	comp := newCompleter(r)
 	r.comp = comp
@@ -292,8 +288,11 @@ func (r *REPL) Run() error {
 		}
 		line, err := r.readInputLine(buf.Len() > 0)
 		if err == readline.ErrInterrupt {
-			buf.Reset()
-			continue
+			// На приглашении Ctrl-C — обычный выход из программы, как \\quit.
+			// Во время выполняющегося запроса SIGINT по-прежнему перехватывает
+			// interruptible и отменяет только этот запрос.
+			fmt.Fprintln(r.out)
+			return nil
 		}
 		if err == io.EOF {
 			fmt.Fprintln(r.out)
@@ -540,8 +539,8 @@ func (r *REPL) runStatement(sql string) {
 	r.clearLastResult()
 
 	// Единый ExecutionPlanner владеет всем решением read-vs-write / refuse /
-	// confirm (аудит 4.1): UI не решает сам, а подчиняется плану. Порядок проверок
-	// (режим записи → tx-control → session-state → подтверждение) живёт в плане.
+	// refuse (аудит 4.1): UI не решает сам, а подчиняется плану. Порядок проверок
+	// (режим записи → tx-control → session-state) живёт в плане.
 	plan := (execution.Planner{}).Plan(execution.Request{SQL: sql, WriteMode: r.writeMode})
 	if plan.Refused() {
 		switch plan.Refusal.Code {
@@ -562,35 +561,13 @@ func (r *REPL) runStatement(sql string) {
 	// Введённая запись оборачивается защитной конструкцией (set local role +
 	// statement_timeout + lock_timeout). Показать, сколько строк затронет
 	// UPDATE/DELETE на каждом шарде — безопаснее, чем psql "выстрелил и смотри";
-	// предпросмотр по умолчанию выключен и включается через \impact on, запрос
-	// подтверждения можно отключить через \write_approve off.
-	countsKnown := r.previewImpact(sql)
-	if r.writeApprove {
-		// План выносит предупреждения (особенно неочевидный случай волатильной
-		// функции с побочным эффектом в SELECT, который read-only транзакция не
-		// блокирует — P1-3).
-		for _, w := range plan.Warnings {
-			fmt.Fprintln(r.out, ui.Danger.Render("⚠ "+w))
-		}
-		var ok bool
-		if plan.Confirm == execution.ConfirmUnqualified {
-			ok = r.confirmUnqualified() // строгий барьер для без-WHERE / TRUNCATE
-		} else {
-			ok = r.confirmWrite()
-		}
-		if !ok {
-			fmt.Fprintln(r.out, "cancelled")
-			return
-		}
-		// Если предпросмотр не смог посчитать каждый шард, радиус поражения
-		// неизвестен — требуем явное дополнительное подтверждение.
-		if !countsKnown {
-			fmt.Fprintln(r.out, ui.Danger.Render("⚠ предпросмотр не сработал на части шардов ('?') — число затрагиваемых строк неизвестно"))
-			if strings.TrimSpace(r.readLine("введите 'yes', чтобы продолжить при неизвестном эффекте: ")) != "yes" {
-				fmt.Fprintln(r.out, "cancelled (unknown impact)")
-				return
-			}
-		}
+	// предпросмотр по умолчанию выключен и включается через \impact on.
+	r.previewImpact(sql)
+	// План выносит предупреждения (особенно неочевидный случай волатильной
+	// функции с побочным эффектом в SELECT, который read-only транзакция не
+	// блокирует — P1-3).
+	for _, w := range plan.Warnings {
+		fmt.Fprintln(r.out, ui.Danger.Render("⚠ "+w))
 	}
 	// Введённая запись — это тело: оборачиваем его защитной конструкцией.
 	r.execWrite(sql, true)
@@ -615,8 +592,8 @@ func (r *REPL) refuseSessionState(reason string) {
 }
 
 // refuseForbidden объясняет, почему операция отклонена БЕЗУСЛОВНО (например DROP
-// DATABASE): для неё нет безопасного сценария из terox, и её нельзя включить ни
-// write-режимом, ни подтверждением.
+// DATABASE): для неё нет безопасного сценария из terox, и её нельзя включить
+// write-режимом.
 func (r *REPL) refuseForbidden(op string) {
 	fmt.Fprintf(r.out, "refused: %s is permanently disabled in terox.\n", op)
 	fmt.Fprintln(r.out, "  it irreversibly destroys an entire shard database and has no safe path from this client —")
@@ -783,7 +760,7 @@ func (r *REPL) execWrite(sql string, wrap bool) ([]db.ExecResult, error) {
 	r.clearLastResult()
 	// DROP DATABASE необратимо уничтожает всю базу шарда; terox запрещает его
 	// БЕЗУСЛОВНО — на любом пути (обёрнутая запись, staged-rollout, \i дословно),
-	// даже в write-режиме с подтверждением. Проверяем ДО разбора и выполнения.
+	// даже во включённом write-режиме. Проверяем ДО разбора и выполнения.
 	if op := migration.ForbiddenOperation(sql); op != "" {
 		r.refuseForbidden(op)
 		return nil, errWriteRefused
@@ -791,7 +768,7 @@ func (r *REPL) execWrite(sql string, wrap bool) ([]db.ExecResult, error) {
 	// Session-state firewall + tx-control backstop ДО любого разбора/выполнения:
 	// self-tx и session-scoped конструкции нельзя оборачивать и они не должны
 	// проскользнуть даже по НЕтранзакционной ветке (например DISCARD ALL, которая
-	// одновременно IsNonTransactional). Вызывающие отклоняют это до подтверждения;
+	// одновременно IsNonTransactional). Вызывающие отклоняют это до выполнения;
 	// здесь — финальная страховка, чтобы обёртку НИКОГДА не обошли молча.
 	if wrap {
 		if migration.HasTxControl(sql) {
@@ -890,32 +867,6 @@ func (r *REPL) runForEach(fn func(context.Context, cluster.Shard) (int64, error)
 // terox её не предполагает.)
 func (r *REPL) role() string {
 	return r.migrationRole
-}
-
-// confirmWrite запрашивает простое подтверждение перед записью: y/yes.
-func (r *REPL) confirmWrite() bool {
-	target := r.targets[0].Label
-	if len(r.targets) > 1 {
-		target = fmt.Sprintf("%d шард(а/ов) [%s]", len(r.targets), r.targetLabel)
-	}
-	ans := r.readLine(fmt.Sprintf("Записать на %s? [y/N] ", target))
-	switch strings.ToLower(strings.TrimSpace(ans)) {
-	case "y", "yes":
-		return true
-	}
-	return false
-}
-
-// confirmUnqualified — более строгий барьер для UPDATE/DELETE без WHERE (или
-// TRUNCATE): он затрагивает все строки, поэтому требует ввести "yes".
-func (r *REPL) confirmUnqualified() bool {
-	warn := "⚠ нет WHERE — это затронет ВСЕ строки"
-	if ui.Enabled {
-		warn = ui.Danger.Render(warn)
-	}
-	fmt.Fprintf(r.out, "%s на %d шард(а/ов) [%s]\n", warn, len(r.targets), r.targetLabel)
-	typed := r.readLine("Введите 'yes' для записи во ВСЕ строки: ")
-	return strings.TrimSpace(typed) == "yes"
 }
 
 // readLine читает одну строку с временным приглашением.

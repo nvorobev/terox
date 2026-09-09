@@ -115,7 +115,7 @@ func TestLiveCopyRoundTrip(t *testing.T) {
 		t.Fatal(err)
 	}
 	r := &REPL{out: io.Discard, cfg: &config.Config{}, mgr: mgr,
-		targets: []cluster.Shard{shard}, writeMode: true, writeApprove: false}
+		targets: []cluster.Shard{shard}, writeMode: true}
 
 	// COPY FROM (загрузка).
 	if err := r.doCopy("\\copy " + tbl + " from " + in + " csv"); err != nil {

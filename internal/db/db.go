@@ -66,6 +66,9 @@ type ShardResult struct {
 type Manager struct {
 	mu    sync.Mutex
 	pools map[string]*pgxpool.Pool
+	// closed запрещает фоновой работе (например, загрузчику completion-каталога)
+	// создать новый пул после начала завершения REPL.
+	closed bool
 
 	// readStmtTimeout, если задан, применяется как SET LOCAL statement_timeout в
 	// каждой read-only транзакции, ограничивая чтения. Строка длительности
@@ -173,6 +176,10 @@ func RedactDSN(dsn string) string {
 func (m *Manager) pool(ctx context.Context, s cluster.Shard) (*pgxpool.Pool, error) {
 	key := poolKey(s)
 	m.mu.Lock()
+	if m.closed {
+		m.mu.Unlock()
+		return nil, errManagerClosed
+	}
 	if p, ok := m.pools[key]; ok {
 		m.mu.Unlock()
 		return p, nil
@@ -215,6 +222,14 @@ func (m *Manager) pool(ctx context.Context, s cluster.Shard) (*pgxpool.Pool, err
 	}
 
 	m.mu.Lock()
+	// Close мог выполниться, пока pgxpool создавался вне блокировки. Такой пул
+	// нельзя публиковать: закрываем его здесь, чтобы после выхода не осталось ни
+	// одного поздно созданного соединения.
+	if m.closed {
+		m.mu.Unlock()
+		p.Close()
+		return nil, errManagerClosed
+	}
 	// Другая горутина могла создать его параллельно.
 	if existing, ok := m.pools[key]; ok {
 		m.mu.Unlock()
@@ -226,14 +241,24 @@ func (m *Manager) pool(ctx context.Context, s cluster.Shard) (*pgxpool.Pool, err
 	return p, nil
 }
 
-// Close освобождает все пулы.
+var errManagerClosed = errors.New("database manager is closed")
+
+// Close запрещает создание новых пулов и освобождает все уже созданные. Метод
+// идемпотентен и безопасен при параллельной фоновой загрузке каталога.
 func (m *Manager) Close() {
 	m.mu.Lock()
-	defer m.mu.Unlock()
-	for _, p := range m.pools {
+	if m.closed {
+		m.mu.Unlock()
+		return
+	}
+	m.closed = true
+	pools := m.pools
+	m.pools = map[string]*pgxpool.Pool{}
+	m.mu.Unlock()
+
+	for _, p := range pools {
 		p.Close()
 	}
-	m.pools = map[string]*pgxpool.Pool{}
 }
 
 // Exec выполняет sql на одном шарде. При readOnly запрос идёт в транзакции

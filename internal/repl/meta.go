@@ -15,7 +15,6 @@ import (
 
 	"terox/internal/cluster"
 	"terox/internal/db"
-	"terox/internal/execution"
 	"terox/internal/migration"
 	"terox/internal/ui"
 	"terox/internal/wizard"
@@ -570,17 +569,6 @@ func (r *REPL) runMeta(line string) (quit bool, err error) {
 		r.suggest = on
 		fmt.Fprintf(r.out, "inline suggestions %s\n", onOff(r.suggest))
 
-	case "\\write_approve":
-		on, e := parseOnOff(args, r.writeApprove)
-		if e != nil {
-			return false, fmt.Errorf("\\write_approve: %w", e)
-		}
-		r.writeApprove = on
-		fmt.Fprintf(r.out, "подтверждение записи %s\n", onOff(r.writeApprove))
-		if !r.writeApprove {
-			fmt.Fprintln(r.out, ui.Dim.Render("  записи выполняются без вопроса — осторожно"))
-		}
-
 	case "\\watch":
 		return false, r.doWatch(args, line)
 
@@ -608,8 +596,8 @@ func (r *REPL) runMeta(line string) (quit bool, err error) {
 // doRepeat (\g / \gx) повторяет последний выполненный запрос. С аргументом-селектором
 // временно сужает цели на это подмножество шардов (\g rs042), затем восстанавливает
 // прежние. \gx показывает результат в expanded-режиме. Запрос идёт через runStatement,
-// поэтому запись была бы заново про-гейчена (режим записи + подтверждение), а не
-// повторена молча.
+// поэтому запись снова проверяется текущим режимом записи, а не повторяется в
+// обход \write off.
 func (r *REPL) doRepeat(args []string, expanded bool) error {
 	if strings.TrimSpace(r.lastQuery) == "" {
 		return fmt.Errorf("no previous query to repeat")
@@ -807,7 +795,7 @@ func (r *REPL) runMigrationFile(wrap bool, o migrateOpts) error {
 		return fmt.Errorf("migrations require write mode (\\write on)")
 	}
 	// \migrate оборачивает тело; тело со своими begin/commit или set role вышло бы
-	// из обёртки — отказываем до подтверждения. \i (wrap=false) шлёт как есть и
+	// из обёртки — отказываем до выполнения. \i (wrap=false) шлёт как есть и
 	// этого ограничения не имеет.
 	if wrap && migration.HasTxControl(content) {
 		r.refuseTxControl()
@@ -855,18 +843,6 @@ func (r *REPL) runMigrationFile(wrap bool, o migrateOpts) error {
 	} else {
 		fmt.Fprintf(r.out, "migration %s → %d shard(s) [%s] as one exec (pass-through)\n",
 			o.path, len(r.targets), r.targetLabel)
-	}
-	if r.writeApprove {
-		var confirmed bool
-		if execution.AnyUnqualifiedWrite(content) {
-			confirmed = r.confirmUnqualified()
-		} else {
-			confirmed = r.confirmWrite()
-		}
-		if !confirmed {
-			fmt.Fprintln(r.out, "cancelled")
-			return nil
-		}
 	}
 	results, err := r.execWrite(content, wrap)
 	if err != nil {

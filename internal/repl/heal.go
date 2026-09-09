@@ -97,8 +97,8 @@ func (r *REPL) detectInvalidIndexes(shard cluster.Shard) ([]invalidIndex, bool) 
 }
 
 // doHeal — точка входа \heal. Без --apply это read-only диагностика (всегда
-// разрешена). С --apply невалидные индексы удаляются (требует write-режим +
-// подтверждение + строгий барьер на prod).
+// разрешена). С --apply невалидные индексы удаляются (требует write-режим;
+// на prod действует отдельный строгий барьер).
 func (r *REPL) doHeal(args []string) error {
 	apply := false
 	for _, a := range args {
@@ -152,8 +152,8 @@ func (r *REPL) healDiagnose() error {
 	return nil
 }
 
-// healApply удаляет невалидные индексы на каждом шарде. Строго за write-режимом +
-// подтверждением; на prod — дополнительный барьер (ввод 'drop'), т.к. DROP INDEX
+// healApply удаляет невалидные индексы на каждом шарде. Строго за write-режимом;
+// на prod — дополнительный барьер (ввод 'drop'), т.к. DROP INDEX
 // CONCURRENTLY идёт ВНЕ транзакции и без защитной обёртки. По каждому шарду строит
 // его собственный набор DROP-команд и выполняет их на ЭТОМ шарде нетранзакционным
 // путём (ExecScript), как в execWrite.
@@ -199,12 +199,7 @@ func (r *REPL) healApply() error {
 	}
 	fmt.Fprintln(r.out, ui.Dim.Render("  DROP INDEX CONCURRENTLY runs UNPROTECTED (outside any transaction; only the client migration_timeout applies)."))
 
-	// Обычное подтверждение записи.
-	if !r.confirmWrite() {
-		fmt.Fprintln(r.out, "cancelled")
-		return nil
-	}
-	// На prod — дополнительный строгий барьер (по образцу 'unprotected' в execWrite).
+	// На prod остаётся отдельный строгий барьер (по образцу 'unprotected' в execWrite).
 	if r.prod {
 		fmt.Fprintf(r.out, "%s dropping indexes on PROD across %d shard(s) [%s] — this is irreversible.\n",
 			ui.Danger.Render("⚠ PROD"), len(order), r.targetLabel)

@@ -13,9 +13,6 @@ func TestPlanRead(t *testing.T) {
 	if p.IsWrite {
 		t.Fatal("SELECT 1 must not be a write")
 	}
-	if p.Confirm != ConfirmNone {
-		t.Fatalf("read must not require confirmation, got %v", p.Confirm)
-	}
 }
 
 func TestPlanWriteWithoutWriteMode(t *testing.T) {
@@ -31,29 +28,29 @@ func TestPlanWriteWithoutWriteMode(t *testing.T) {
 	}
 }
 
-func TestPlanWriteQualifiedConfirm(t *testing.T) {
+func TestPlanWriteQualifiedAllowed(t *testing.T) {
 	p := (Planner{}).Plan(Request{SQL: "UPDATE t SET x=1 WHERE id=1", WriteMode: true})
 	if p.Refused() {
 		t.Fatalf("qualified write in write mode must not be refused: %+v", p.Refusal)
 	}
-	if p.Confirm != ConfirmWrite {
-		t.Fatalf("qualified write must need ConfirmWrite, got %v", p.Confirm)
+	if !p.IsWrite {
+		t.Fatal("qualified UPDATE must be classified as a write")
 	}
 }
 
-func TestPlanUnqualifiedWriteConfirm(t *testing.T) {
+func TestPlanUnqualifiedWriteAllowed(t *testing.T) {
 	for _, sql := range []string{
 		"UPDATE t SET x=1",
 		"DELETE FROM t",
 		"TRUNCATE t",
-		"SELECT 1; DELETE FROM t", // завершающий безусловный DML тоже под строгим барьером
+		"SELECT 1; DELETE FROM t",
 	} {
 		p := (Planner{}).Plan(Request{SQL: sql, WriteMode: true})
 		if p.Refused() {
 			t.Fatalf("%q must not be refused: %+v", sql, p.Refusal)
 		}
-		if p.Confirm != ConfirmUnqualified {
-			t.Fatalf("%q must need ConfirmUnqualified, got %v", sql, p.Confirm)
+		if !p.Decision.Unqualified {
+			t.Fatalf("%q must retain the unqualified-write risk marker", sql)
 		}
 	}
 }

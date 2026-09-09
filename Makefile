@@ -49,8 +49,9 @@ build:
 # install: build, then copy the binary into $(BINDIR) (auto-picked to be on your
 # PATH; sudo only if not writable). Also deploys the project's ./config.yaml to the
 # standard XDG location ~/.config/terox/config.yaml (mode 0600) — the project file
-# is the source of truth, so each install refreshes it. If ./config.yaml is absent,
-# the config is left untouched.
+# is the source of truth, so each install refreshes it. Before replacing a different
+# existing config, saves it beside the target as config.yaml.bak.YYYYMMDD-HHMMSS.
+# If ./config.yaml is absent, the installed config is left untouched.
 .PHONY: install
 install: build
 	@if [ -w "$(BINDIR)" ] || { [ ! -e "$(BINDIR)" ] && [ -w "$(dir $(BINDIR))" ]; }; then \
@@ -62,8 +63,21 @@ install: build
 	@echo "✓ installed $(BINARY) → $(BINDIR)/$(BINARY)"
 	@cfgdir="$${XDG_CONFIG_HOME:-$$HOME/.config}/terox"; \
 	if [ -f config.yaml ]; then \
-		mkdir -p "$$cfgdir" && chmod 700 "$$cfgdir" && install -m 0600 config.yaml "$$cfgdir/config.yaml"; \
-		echo "✓ config: ./config.yaml → $$cfgdir/config.yaml (0600)"; \
+		mkdir -p "$$cfgdir" && chmod 700 "$$cfgdir"; \
+		target="$$cfgdir/config.yaml"; \
+		if [ -f "$$target" ] && cmp -s config.yaml "$$target"; then \
+			chmod 600 "$$target"; \
+			echo "· config unchanged: $$target"; \
+		else \
+			if [ -f "$$target" ]; then \
+				backup="$$target.bak.$$(date +%Y%m%d-%H%M%S)"; \
+				if [ -e "$$backup" ]; then backup="$$backup.$$$$"; fi; \
+				install -m 0600 "$$target" "$$backup"; \
+				echo "✓ config backup: $$backup (0600)"; \
+			fi; \
+			install -m 0600 config.yaml "$$target"; \
+			echo "✓ config: ./config.yaml → $$target (0600)"; \
+		fi; \
 	else \
 		echo "· no ./config.yaml in project — config not installed (create one, e.g. from config.example.yaml)"; \
 	fi
@@ -186,7 +200,7 @@ help:
 	@echo "terox Makefile targets:"
 	@echo "  make / make all   clean reinstall into a PATH dir (+config), then verify"
 	@echo "  make build        compile ./terox only"
-	@echo "  make install      install binary + config.yaml to $(BINDIR)"
+	@echo "  make install      install binary + config.yaml to $(BINDIR) (backs up a changed existing config)"
 	@echo "  make install-go   install to the Go bin dir (no sudo; must be on PATH)"
 	@echo "  make verify       check single copy on PATH + version matches main.go"
 	@echo "  make uninstall    remove every terox binary on PATH / in known dirs"

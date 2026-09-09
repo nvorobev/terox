@@ -49,7 +49,7 @@ func Run(cfg *config.Config) (service, storage string, err error) {
 			huh.NewInput().Title("User").Value(&user).Validate(nonEmpty("user")),
 			huh.NewInput().Title("Password").EchoMode(huh.EchoModePassword).Value(&password),
 			huh.NewConfirm().Title("Production cluster?").
-				Description("Marks the cluster prod: red prompt badge + extra write confirmations.").
+				Description("Marks the cluster prod: red prompt badge + barriers for unprotected operations.").
 				Value(&isProd),
 			huh.NewInput().Title("Write role (optional)").
 				Description("Writes elevate via 'set local role <role>' (a full-write, non-superuser role). Leave blank for none.").

@@ -32,8 +32,7 @@ var helpEntries = []helpEntry{
 	{[]string{"l", "list"}, "Navigation", "\\l", "List services and storages.", nil, ""},
 	{[]string{"add"}, "Navigation", "\\add", "Register a new cluster via the wizard (first/last host → template + range).", nil, ""},
 
-	{[]string{"write"}, "Modes & input", "\\write on|off", "Toggle write mode. Read-only by default; writes need it on, plus confirmation. Resets to read-only when you switch storage/service (a per-context lease).", []string{"\\write on"}, "enables destructive statements on prod"},
-	{[]string{"write_approve"}, "Modes & input", "\\write_approve [on|off]", "Toggle the write confirmation prompt (on by default). With it off, writes run without asking.", []string{"\\write_approve off"}, "disables the confirmation barrier before writes"},
+	{[]string{"write"}, "Modes & input", "\\write on|off", "Toggle write mode. Read-only by default; while it is on, ordinary writes run without an extra confirmation. Resets to read-only when you switch storage/service (a per-context lease).", []string{"\\write on", "\\write off"}, "enables destructive statements on prod"},
 	{[]string{"timeout"}, "Modes & input", "\\timeout [value|off]", "Set statement_timeout (server-side, bounds reads and migrations). Shown as st= in the prompt.", []string{"\\timeout 500ms", "\\timeout 2min", "\\timeout off"}, ""},
 	{[]string{"maxrows"}, "Modes & input", "\\maxrows [N|unlimited]", "Row display limit per query. Rejects invalid/negative input.", []string{"\\maxrows 50", "\\maxrows unlimited"}, ""},
 	{[]string{"timing"}, "Modes & input", "\\timing [on|off]", "Show/hide query duration in the result footer (on by default).", nil, ""},
@@ -46,7 +45,7 @@ var helpEntries = []helpEntry{
 
 	{[]string{"ping"}, "Diagnostics", "\\ping", "Connectivity and latency of every targeted shard.", nil, ""},
 	{[]string{"doctor"}, "Diagnostics", "\\doctor [--all]", "Health check (connections, locks, bloat, invalid indexes, replication slots, wraparound...). --all aggregates across every shard.", []string{"\\doctor", "\\doctor --all"}, ""},
-	{[]string{"heal"}, "Diagnostics", "\\heal [--apply]", "Find invalid indexes (leftovers of a failed CREATE INDEX CONCURRENTLY) on the targeted shards and print a ready DROP INDEX CONCURRENTLY for each. Read-only without --apply; --apply drops them per shard (needs \\write on, asks for confirmation, and a stricter 'drop' barrier on prod).", []string{"\\heal", "\\heal --apply"}, "--apply drops indexes (needs \\write on)"},
+	{[]string{"heal"}, "Diagnostics", "\\heal [--apply]", "Find invalid indexes (leftovers of a failed CREATE INDEX CONCURRENTLY) on the targeted shards and print a ready DROP INDEX CONCURRENTLY for each. Read-only without --apply; --apply drops them per shard (needs \\write on and has a stricter 'drop' barrier on prod).", []string{"\\heal", "\\heal --apply"}, "--apply drops indexes (needs \\write on)"},
 	{[]string{"diff"}, "Diagnostics", "\\diff <table>", "Compare a table across the targeted shards (schema drift): columns (type/null/default/identity/generated/collation), indexes (incl. INVALID/NOT READY), constraints (incl. NOT VALID), triggers, RLS + policies, partition bound, and view/matview definition. Lists which dimensions differ.", []string{"\\diff items"}, ""},
 	{[]string{"compare"}, "Diagnostics", "\\compare <service/storage>", "Diff schema, indexes, extension versions and config vs another storage (why it behaves differently there).", []string{"\\compare cold/prod"}, ""},
 	{[]string{"completion"}, "Diagnostics", "\\completion [status|reload]", "Show the autocomplete catalog state (flags partial/forbidden/timeout segments and per-shard coverage), or reload it.", nil, ""},
@@ -85,7 +84,7 @@ var helpEntries = []helpEntry{
 
 	{[]string{"h", "history"}, "History & misc", "\\h", "History hint (Up/Down to browse, Ctrl-R to search).", nil, ""},
 	{[]string{"help", "?"}, "History & misc", "\\help [command]", "This help. With a command, shows its syntax, examples and risks.", []string{"\\help explain", "\\help write"}, ""},
-	{[]string{"q", "quit"}, "History & misc", "\\q", "Quit.", nil, ""},
+	{[]string{"quit", "q"}, "History & misc", "\\quit", "Quit (\\q remains accepted as a shortcut).", nil, ""},
 }
 
 func lookupHelp(name string) *helpEntry {

@@ -17,18 +17,21 @@ func writeTemp(t *testing.T, body string) string {
 	return p
 }
 
-func TestWriteApproveEnabled(t *testing.T) {
-	// По умолчанию (не задано) подтверждение записи включено.
-	if !(&Config{}).WriteApproveEnabled() {
-		t.Error("write approve must default to enabled")
+func TestWriteModeDefaultLoadsFromYAML(t *testing.T) {
+	p := writeTemp(t, "write_mode_default: true\n")
+	c, err := Load(p)
+	if err != nil {
+		t.Fatal(err)
 	}
-	off := false
-	if (&Config{WriteApprove: &off}).WriteApproveEnabled() {
-		t.Error("explicit write_approve: false must disable confirmation")
+	if !c.WriteModeDefault {
+		t.Fatal("write_mode_default: true must enable the initial write mode")
 	}
-	on := true
-	if !(&Config{WriteApprove: &on}).WriteApproveEnabled() {
-		t.Error("explicit write_approve: true must enable confirmation")
+}
+
+func TestWriteApproveConfigOptionIsRemoved(t *testing.T) {
+	p := writeTemp(t, "write_approve: true\n")
+	if _, err := Load(p); err == nil || !strings.Contains(err.Error(), "write_approve") {
+		t.Fatalf("removed write_approve option must be rejected, got %v", err)
 	}
 }
 

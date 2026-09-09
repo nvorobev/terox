@@ -1456,19 +1456,15 @@ func topLevelClauseIndex(masked, kw string) int {
 func hasTopLevelClause(masked, kw string) bool { return topLevelClauseIndex(masked, kw) >= 0 }
 
 // previewImpact перед записью показывает, сколько строк UPDATE/DELETE затронет на
-// каждом шарде (по возможности). Возвращает countsKnown=false, если предпросмотр не
-// смог получить счётчик с КАЖДОЙ цели (шард с ошибкой показан как "?"), чтобы
-// вызывающий мог сработать "fail closed" и потребовать явного подтверждения, а не
-// пропустить неизвестный радиус поражения. Оператор, который вовсе нельзя показать в
-// предпросмотре (не UPDATE/DELETE или UPDATE..FROM), возвращает true — действовать
-// не на что, а обычный гейт записи всё равно применяется.
-func (r *REPL) previewImpact(sql string) (countsKnown bool) {
+// каждом шарде (по возможности). Это информационный режим: право на выполнение
+// определяет только \write on, поэтому ошибка предпросмотра не блокирует запись.
+func (r *REPL) previewImpact(sql string) {
 	if !r.impact {
-		return true
+		return
 	}
 	table, where, ok := parseDML(sql)
 	if !ok {
-		return true
+		return
 	}
 	q := "SELECT count(*) AS would_affect FROM " + table
 	if where != "" {
@@ -1480,11 +1476,9 @@ func (r *REPL) previewImpact(sql string) (countsKnown bool) {
 	r.mgr.SetReadTimeout(r.stmtTimeout)
 	defer r.mgr.SetReadTimeout("")
 	results := r.fanoutRead(q)
-	// Нет ни одного результата (нет целей/всё отвалилось до запроса) — радиус
-	// поражения неизвестен. Fail closed: требуем явного подтверждения, а не
-	// пропускаем запись с молчаливым "всё известно".
 	if len(results) == 0 {
-		return false
+		fmt.Fprintln(r.out, "impact preview unavailable; proceeding because write mode is on")
+		return
 	}
 	var rows [][]string
 	var total int64
@@ -1505,7 +1499,7 @@ func (r *REPL) previewImpact(sql string) (countsKnown bool) {
 		rows = append(rows, []string{sr.Shard.LabelDB(), fmt.Sprintf("%d", cnt)})
 	}
 	if !parsed {
-		return !hadError
+		return
 	}
 	warn := ""
 	if where == "" {
@@ -1514,5 +1508,7 @@ func (r *REPL) previewImpact(sql string) (countsKnown bool) {
 	fmt.Fprintf(r.out, "impact preview — rows that match%s\n", warn)
 	render.Table(r.out, []string{"shard", "would_affect"}, rows,
 		fmt.Sprintf("TOTAL: %d rows would be affected", total))
-	return !hadError
+	if hadError {
+		fmt.Fprintln(r.out, "impact preview is incomplete ('?' marks unknown shard counts); proceeding because write mode is on")
+	}
 }

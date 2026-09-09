@@ -10,7 +10,6 @@ import (
 
 	"terox/internal/cluster"
 	"terox/internal/db"
-	"terox/internal/execution"
 	"terox/internal/migration"
 	"terox/internal/ui"
 )
@@ -116,19 +115,6 @@ func (r *REPL) runStagedRollout(wrap bool, content, name string, plan migration.
 		fmt.Fprintf(r.out, "resume: skipping %d already-applied shard(s): %s\n", len(pl.Skipped), strings.Join(pl.Skipped, ", "))
 	}
 	fmt.Fprintf(r.out, "rollout %s → %d pending shard(s) in %d stage(s) [%s]\n", name, len(pl.Pending), len(pl.Stages), r.targetLabel)
-
-	if r.writeApprove {
-		var ok bool
-		if execution.AnyUnqualifiedWrite(content) {
-			ok = r.confirmUnqualified()
-		} else {
-			ok = r.confirmWrite()
-		}
-		if !ok {
-			fmt.Fprintln(r.out, "cancelled")
-			return nil
-		}
-	}
 
 	saved := r.targets
 	defer func() { r.targets = saved }()

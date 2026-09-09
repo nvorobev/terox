@@ -10,16 +10,17 @@ import (
 )
 
 // metaCommands — мета-команды для дополнения строк, начинающихся с обратной
-// косой черты; единый источник для tab-дополнения, включая все алиасы.
+// косой черты; команды выхода идут первыми, остальные команды и алиасы — следом.
 var metaCommands = []string{
+	"\\q", "\\quit",
 	"\\use", "\\c", "\\connect", "\\shard", "\\s", "\\shards", "\\l", "\\list", "\\add",
-	"\\write", "\\write_approve", "\\timeout", "\\maxrows", "\\timing", "\\x", "\\impact", "\\suggest",
+	"\\write", "\\timeout", "\\maxrows", "\\timing", "\\x", "\\impact", "\\suggest",
 	"\\e", "\\edit", "\\migrate", "\\m", "\\i", "\\include", "\\dt", "\\dn", "\\di", "\\d", "\\watch", "\\g", "\\gx", "\\grep",
 	"\\count", "\\locate", "\\find", "\\diff", "\\ping", "\\explain", "\\doctor", "\\heal", "\\compare",
 	"\\export", "\\save", "\\run", "\\queries", "\\unsave", "\\completion",
 	"\\activity", "\\blockers", "\\locks", "\\longtx",
 	"\\statements", "\\workload", "\\cancel", "\\terminate", "\\copy", "\\advise", "\\lint", "\\sizes",
-	"\\editor", "\\layout", "\\h", "\\history", "\\help", "\\?", "\\q", "\\quit",
+	"\\editor", "\\layout", "\\h", "\\history", "\\help", "\\?",
 }
 
 // completer реализует readline.AutoCompleter с учётом каталога: мета-команды
@@ -68,7 +69,13 @@ func (c *completer) suggestions(line string, pos int) (subs []string, replaceRun
 		word := currentWord(head)
 		var sources [][]string
 		if !strings.ContainsAny(trimmed, " \t") {
-			sources = [][]string{metaCommands} // ещё набирается имя команды
+			if strings.EqualFold(word, "\\q") {
+				// \\queries тоже начинается с \\q, но короткий выходной префикс
+				// должен предлагать только его каноническое продолжение \\quit.
+				sources = [][]string{{"\\q", "\\quit"}}
+			} else {
+				sources = [][]string{metaCommands} // ещё набирается имя команды
+			}
 		} else {
 			sources = c.metaArgs(head)
 		}
@@ -369,7 +376,7 @@ func (c *completer) metaArgs(head string) [][]string {
 		if c.r.queries != nil {
 			return [][]string{c.r.queries.Names()}
 		}
-	case "\\write", "\\write_approve", "\\impact", "\\suggest", "\\timing":
+	case "\\write", "\\impact", "\\suggest", "\\timing":
 		return [][]string{{"on", "off"}}
 	case "\\count", "\\locate", "\\find":
 		// Первый аргумент — [schema.]table; после второй точки ("schema.table.")
@@ -536,7 +543,12 @@ func suffixes(word string, sources [][]string) []string {
 			}
 			if strings.HasPrefix(strings.ToLower(cand), lw) {
 				seen[cand] = true
-				out = append(out, cand[wlen:])
+				// Уже набранная точная команда/опция не является дополнением.
+				// Например, для \\q список должен предлагать только \\quit, а не
+				// повторять отдельной строкой уже введённый \\q.
+				if suffix := cand[wlen:]; suffix != "" {
+					out = append(out, suffix)
+				}
 			}
 		}
 	}

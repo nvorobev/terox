@@ -20,10 +20,6 @@ import (
 type Config struct {
 	// WriteModeDefault включает режим записи при старте.
 	WriteModeDefault bool `yaml:"write_mode_default"`
-	// WriteApprove управляет подтверждением перед записью. Указатель: явный
-	// `write_approve: false` отключает запрос подтверждения, nil (отсутствие) —
-	// включено. Переключается командой \write_approve. Получать через WriteApproveEnabled().
-	WriteApprove *bool `yaml:"write_approve,omitempty"`
 	// Editor выбирает интерактивный редактор строки: "tea" — редактор с живым
 	// выпадающим автодополнением, любое другое значение (по умолчанию) — классический
 	// readline. Переопределяется через TEROX_EDITOR и переключается командой \editor.
@@ -200,10 +196,6 @@ func (c *Config) Path() string { return c.path }
 // AutoKeymapEnabled сообщает, включена ли конвертация раскладки кириллица→латиница
 // (по умолчанию true; отключается только явным auto_keymap: false).
 func (c *Config) AutoKeymapEnabled() bool { return c.AutoKeymap == nil || *c.AutoKeymap }
-
-// WriteApproveEnabled сообщает, нужно ли подтверждение перед записью (по
-// умолчанию да; отключается явным write_approve: false или командой \write_approve off).
-func (c *Config) WriteApproveEnabled() bool { return c.WriteApprove == nil || *c.WriteApprove }
 
 // TimingEnabled — показывать ли длительность запроса по умолчанию (\timing). nil → включено.
 func (c *Config) TimingEnabled() bool { return c.Timing == nil || *c.Timing }
@@ -619,8 +611,8 @@ func (c *Config) Findings() []Finding {
 	if c.MigrationTimeout < 0 {
 		addErr("migration-timeout-negative", "", "migration_timeout must not be negative")
 	}
-	// Старт в режиме записи против прод-кластера — рискованно: первый же разрушительный
-	// оператор отделяет одно подтверждение. Предупреждаем, если задано и то, и другое.
+	// Старт в режиме записи против прод-кластера рискован: обычные записи после
+	// запуска выполняются сразу. Предупреждаем, если задано и то, и другое.
 	if c.WriteModeDefault {
 		for _, sName := range c.ServiceNames() {
 			svc := c.Services[sName]

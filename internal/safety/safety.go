@@ -1,6 +1,6 @@
 // Package safety оценивает ИСПОЛНИТЕЛЬНЫЙ РИСК SQL (ExecutionRisk): read-only,
 // волатильный побочный эффект, запись или безусловная запись — чтобы ограждать
-// опасные запросы режимом записи и подтверждениями.
+// опасные запросы режимом записи и предупреждениями.
 //
 // ВАЖНО: это ЭВРИСТИКА, а НЕ доказанная граница безопасности. Классификатор по
 // регуляркам не видит пользовательских функций/расширений и новых команд PostgreSQL.
@@ -97,7 +97,7 @@ var mainDMLRe = regexp.MustCompile(`(?is)\b(update|delete|truncate)\b`)
 
 // mergeMatchedDMLRe ищет в MERGE действие WHEN MATCHED THEN UPDATE/DELETE.
 // У MERGE нет верхнеуровневого WHERE — радиус задаёт ON-условие, поэтому такое
-// действие может затронуть ВСЕ строки цели и требует усиленного подтверждения.
+// действие может затронуть ВСЕ строки цели и получает повышенный уровень риска.
 // Чистый WHEN NOT MATCHED THEN INSERT (вставка новых строк) сюда не попадает и
 // корректно остаётся обычной записью.
 var mergeMatchedDMLRe = regexp.MustCompile(`(?is)\bwhen\s+matched\b.*\bthen\s+(update|delete)\b`)
@@ -132,7 +132,7 @@ func topLevelParenGroups(s string) []string {
 // cteBodyIsUnqualified сообщает, является ли тело CTE (уже очищенное)
 // изменяющим данные UPDATE/DELETE без WHERE верхнего уровня — т.е. оно меняет
 // все строки цели. Изменяющий данные CTE в PostgreSQL выполняется всегда, даже
-// если его результат не используется, поэтому требует усиленного подтверждения.
+// если его результат не используется, поэтому получает повышенный уровень риска.
 func cteBodyIsUnqualified(body string) bool {
 	body = strings.TrimSpace(body)
 	for strings.HasPrefix(body, "(") {
@@ -226,7 +226,7 @@ func stripExplainAnalyze(clean string) (string, bool) {
 
 // IsUnqualifiedWrite сообщает, является ли sql UPDATE/DELETE/TRUNCATE,
 // затрагивающим ВСЕ строки: UPDATE или DELETE без WHERE верхнего уровня, либо
-// TRUNCATE. Используется для запроса усиленного подтверждения.
+// TRUNCATE. Используется для оценки риска безусловной записи.
 func IsUnqualifiedWrite(sql string) bool {
 	return isUnqualifiedClean(sanitize(sql))
 }
@@ -239,8 +239,8 @@ func isUnqualifiedClean(clean string) bool {
 		clean = strings.TrimSpace(clean[1:])
 	}
 	// EXPLAIN ANALYZE реально выполняет вложенный запрос, поэтому безусловный DML
-	// под ним (TRUNCATE/DELETE/UPDATE без WHERE) требует того же усиленного
-	// подтверждения. Обычный EXPLAIN ничего не исполняет и сюда не относится.
+	// под ним (TRUNCATE/DELETE/UPDATE без WHERE) получает тот же повышенный
+	// уровень риска. Обычный EXPLAIN ничего не исполняет и сюда не относится.
 	if rest, ok := stripExplainAnalyze(clean); ok {
 		return isUnqualifiedClean(rest)
 	}
@@ -251,7 +251,7 @@ func isUnqualifiedClean(clean string) bool {
 		// MERGE с действием WHEN MATCHED THEN UPDATE/DELETE — потенциально
 		// безусловная массовая запись: радиус задаёт ON-условие соединения, а
 		// верхнеуровневого WHERE нет, поэтому WHERE-эвристика неприменима.
-		// Консервативно требуем усиленного подтверждения. Чистый WHEN NOT MATCHED
+		// Консервативно отмечаем повышенный риск. Чистый WHEN NOT MATCHED
 		// THEN INSERT остаётся обычной записью.
 		return mergeMatchedDMLRe.MatchString(clean)
 	case "update", "delete":
@@ -261,7 +261,7 @@ func isUnqualifiedClean(clean string) bool {
 		// `WITH c AS (...) UPDATE t SET x=1` (без WHERE) меняет все строки. Убираем
 		// скобочные тела CTE/подзапросы и смотрим завершающий глагол верхнего
 		// уровня. (Пишущее тело CTE без WHERE всё равно помечается как запись в
-		// IsWrite и подтверждается; здесь — только *усиленный* барьер.)
+		// IsWrite; здесь отдельно отмечаем повышенный риск.)
 		//
 		// Само изменяющее данные тело CTE может быть безусловной записью, даже
 		// если завершающий запрос — безобидный SELECT, например
@@ -354,7 +354,7 @@ func isWriteSingle(sql string) bool {
 	// PREPARE/EXECUTE, DISCARD, LISTEN/NOTIFY, SECURITY LABEL, IMPORT FOREIGN
 	// SCHEMA, голый BEGIN, ...) — не доказуемо read-only, поэтому считается
 	// потенциальной ЗАПИСЬЮ и ограждается. Это консервативное направление:
-	// ошибочно помеченное чтение лишь попросит подтверждение, тогда как ошибочно
-	// пропущенная запись может незащищённо изменить прод.
+	// ошибочно помеченное чтение потребует включённого write-режима, тогда как
+	// ошибочно пропущенная запись может незащищённо изменить prod.
 	return true
 }

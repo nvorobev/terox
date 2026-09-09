@@ -296,37 +296,144 @@ func (m *editorModel) lineBounds(pos int) (start, end int) {
 	return start, end
 }
 
-// moveCursorVert двигает курсор на строку вверх (dir=-1) или вниз (dir=+1) внутри
-// многострочного буфера, сохраняя визуальную колонку. Возвращает false, если двигаться
-// в этом направлении некуда (курсор на крайней строке) — тогда вызывающий уходит в
-// историю.
-func (m *editorModel) moveCursorVert(dir int) bool {
-	start, end := m.lineBounds(m.cursor)
-	col := m.cursor - start
-	if dir < 0 {
-		if start == 0 {
-			return false // первая строка
+// inputVisualRow — одна физическая строка редактора после soft-wrap. start/end —
+// позиции в исходном буфере: визуальные переносы не добавляют '\n' в SQL.
+type inputVisualRow struct {
+	start  int
+	end    int
+	prompt string
+}
+
+// runeDisplayWidth возвращает ширину руны в терминальных ячейках.
+func runeDisplayWidth(r rune) int {
+	if r == '\t' {
+		return 4
+	}
+	w := lipgloss.Width(string(r))
+	if w < 0 {
+		return 0
+	}
+	return w
+}
+
+func runesDisplayWidth(rs []rune) int {
+	w := 0
+	for _, r := range rs {
+		w += runeDisplayWidth(r)
+	}
+	return w
+}
+
+// visualRows раскладывает логические строки по ширине терминала. Первая
+// физическая строка получает основной prompt, остальные — contPrompt. При
+// неизвестной ширине (до WindowSizeMsg) wrapping отключён. Если курсор стоит
+// после полностью заполненной строки, добавляется пустая строка продолжения.
+func (m *editorModel) visualRows(withCursor bool) []inputVisualRow {
+	var rows []inputVisualRow
+	lineStart := 0
+	for {
+		lineEnd := len(m.input)
+		for i := lineStart; i < len(m.input); i++ {
+			if m.input[i] == '\n' {
+				lineEnd = i
+				break
+			}
 		}
-		prevStart, prevEnd := m.lineBounds(start - 1)
-		m.cursor = prevStart + col
-		if m.cursor > prevEnd {
-			m.cursor = prevEnd
+
+		pos := lineStart
+		for pos < lineEnd || (pos == lineStart && lineStart == lineEnd) {
+			prompt := m.contPrompt
+			if len(rows) == 0 {
+				prompt = m.prompt
+			}
+			end := lineEnd
+			if m.width > 0 {
+				available := m.width - lipgloss.Width(prompt)
+				if available < 1 {
+					available = 1
+				}
+				used := 0
+				end = pos
+				for end < lineEnd {
+					w := runeDisplayWidth(m.input[end])
+					if end > pos && used+w > available {
+						break
+					}
+					used += w
+					end++
+					if used >= available {
+						break
+					}
+				}
+			}
+			rows = append(rows, inputVisualRow{start: pos, end: end, prompt: prompt})
+			if end >= lineEnd {
+				break
+			}
+			pos = end
 		}
-	} else {
-		if end >= len(m.input) {
-			return false // последняя строка
+
+		if withCursor && m.width > 0 && m.cursor == lineEnd && len(rows) > 0 {
+			last := rows[len(rows)-1]
+			available := m.width - lipgloss.Width(last.prompt)
+			if available < 1 {
+				available = 1
+			}
+			if runesDisplayWidth(m.input[last.start:last.end]) >= available {
+				rows = append(rows, inputVisualRow{start: lineEnd, end: lineEnd, prompt: m.contPrompt})
+			}
 		}
-		nextStart, nextEnd := m.lineBounds(end + 1)
-		m.cursor = nextStart + col
-		if m.cursor > nextEnd {
-			m.cursor = nextEnd
+
+		if lineEnd == len(m.input) {
+			break
+		}
+		lineStart = lineEnd + 1
+	}
+	return rows
+}
+
+// cursorVisualRow выбирает последнюю подходящую строку: на границе soft-wrap
+// позиция курсора принадлежит началу следующей строки.
+func cursorVisualRow(rows []inputVisualRow, cursor int) int {
+	row := 0
+	for i, r := range rows {
+		if cursor >= r.start && cursor <= r.end {
+			row = i
 		}
 	}
+	return row
+}
+
+func (m *editorModel) cursorAtDisplayColumn(row inputVisualRow, col int) int {
+	used := 0
+	for i := row.start; i < row.end; i++ {
+		w := runeDisplayWidth(m.input[i])
+		if used+w > col {
+			return i
+		}
+		used += w
+	}
+	return row.end
+}
+
+// moveCursorVert двигает курсор по видимым строкам, включая строки soft-wrap,
+// сохраняя терминальную колонку. false означает внешний край всего буфера.
+func (m *editorModel) moveCursorVert(dir int) bool {
+	rows := m.visualRows(true)
+	current := cursorVisualRow(rows, m.cursor)
+	target := current + dir
+	if target < 0 || target >= len(rows) {
+		return false
+	}
+	col := runesDisplayWidth(m.input[rows[current].start:m.cursor])
+	m.cursor = m.cursorAtDisplayColumn(rows[target], col)
 	m.menuActive = false
 	return true
 }
 
-// cursorRowCol возвращает (строка, колонка) курсора в рунах для отрисовки.
+// cursorRowCol возвращает логическую строку и колонку курсора. Визуальная
+// навигация использует visualRows, а этот helper остаётся полезен для операций и
+// проверок, которым нужны именно реальные '\n' из SQL.
 func (m *editorModel) cursorRowCol() (row, col int) {
 	for i := 0; i < m.cursor && i < len(m.input); i++ {
 		if m.input[i] == '\n' {
@@ -648,10 +755,10 @@ func (m *editorModel) View() string {
 	return b.String()
 }
 
-// renderInput рисует весь (возможно многострочный) ввод: первую строку с основным
-// приглашением, продолжения — с выровненным contPrompt, с подсветкой SQL. При
-// withCursor на позиции курсора рисуется блочный курсор (символ под ним инверсией,
-// либо завершающий пробел в конце строки), чтобы курсор был всегда виден.
+// renderInput рисует ввод с настоящими и визуальными переносами. Soft-wrap не
+// меняет m.input и отправляемый SQL. Первая физическая строка получает основной
+// prompt, остальные — contPrompt. При withCursor на позиции курсора рисуется
+// блочный курсор (символ под ним инверсией либо пробел в конце строки).
 func (m *editorModel) renderInput(withCursor bool) string {
 	cur := lipgloss.NewStyle().Reverse(true)
 	hl := func(s string) string {
@@ -660,28 +767,36 @@ func (m *editorModel) renderInput(withCursor bool) string {
 		}
 		return highlightSQL(s)
 	}
-	row, col := -1, -1
-	if withCursor {
-		row, col = m.cursorRowCol()
+	visible := func(rs []rune) string {
+		// Фиксированное отображение таба совпадает с runeDisplayWidth и не даёт
+		// терминальному tab-stop снова вытолкнуть строку за правую границу.
+		return hl(strings.ReplaceAll(string(rs), "\t", "    "))
 	}
-	lines := strings.Split(string(m.input), "\n")
+	rows := m.visualRows(withCursor)
+	cursorRow := -1
+	if withCursor {
+		cursorRow = cursorVisualRow(rows, m.cursor)
+	}
 	var b strings.Builder
-	for i, ln := range lines {
-		if i == 0 {
-			b.WriteString(m.prompt)
-		} else {
+	for i, row := range rows {
+		if i > 0 {
 			b.WriteString("\n")
-			b.WriteString(m.contPrompt)
 		}
-		if i != row {
-			b.WriteString(hl(ln))
+		b.WriteString(row.prompt)
+		segment := m.input[row.start:row.end]
+		if i != cursorRow {
+			b.WriteString(visible(segment))
 			continue
 		}
-		runes := []rune(ln)
-		if col >= len(runes) {
-			b.WriteString(hl(ln) + cur.Render(" "))
+		col := m.cursor - row.start
+		if col >= len(segment) {
+			b.WriteString(visible(segment) + cur.Render(" "))
 		} else {
-			b.WriteString(hl(string(runes[:col])) + cur.Render(string(runes[col])) + hl(string(runes[col+1:])))
+			cursorCell := string(segment[col])
+			if segment[col] == '\t' {
+				cursorCell = "    "
+			}
+			b.WriteString(visible(segment[:col]) + cur.Render(cursorCell) + visible(segment[col+1:]))
 		}
 	}
 	return b.String()

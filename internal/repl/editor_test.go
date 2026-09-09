@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 
 	"terox/internal/complete"
 	"terox/internal/config"
@@ -320,6 +321,66 @@ func TestEditorCursorRendersMidLine(t *testing.T) {
 	typeStr(m2, "ab")
 	if got := m2.renderInput(true); !strings.Contains(got, "ab") {
 		t.Errorf("end-of-line render should contain the text; got %q", got)
+	}
+}
+
+func TestEditorSoftWrapKeepsLongInputVisibleAndUnchanged(t *testing.T) {
+	m := newTestEditor()
+	m.prompt = "> "
+	m.contPrompt = "  "
+	m.width = 12 // десять ячеек ввода после приглашения
+	query := "select 12345678901234567890;"
+	paste(m, query)
+
+	rendered := m.renderInput(true)
+	rows := strings.Split(rendered, "\n")
+	if len(rows) < 3 {
+		t.Fatalf("long input must soft-wrap across visible rows; got %q", rendered)
+	}
+	for i, row := range rows {
+		if width := lipgloss.Width(row); width > m.width {
+			t.Errorf("rendered row %d exceeds terminal width: %d > %d (%q)", i, width, m.width, row)
+		}
+	}
+	if got := m.line(); got != query {
+		t.Fatalf("soft-wrap must not modify submitted SQL: got %q", got)
+	}
+}
+
+func TestEditorPasteMultilineAndSubmit(t *testing.T) {
+	m := newTestEditor()
+	m.prompt = "> "
+	m.contPrompt = "  "
+	m.width = 24
+	query := "select o.id, o.status\nfrom orders o\nwhere o.id > 10;"
+	paste(m, query)
+
+	if got := m.line(); got != query {
+		t.Fatalf("multiline paste changed input:\n got: %q\nwant: %q", got, query)
+	}
+	if rows := strings.Count(m.renderInput(true), "\n") + 1; rows < 3 {
+		t.Fatalf("multiline input must remain visible on multiple rows; got %d", rows)
+	}
+	m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if !m.done || m.submitted != query {
+		t.Fatalf("Enter must submit the complete multiline query; done=%v submitted=%q", m.done, m.submitted)
+	}
+}
+
+func TestEditorVerticalMovementAcrossSoftWrap(t *testing.T) {
+	m := newTestEditor()
+	m.prompt = ""
+	m.contPrompt = ""
+	m.width = 6
+	paste(m, "abcdefghij")
+
+	press(m, tea.KeyUp)
+	if m.cursor != 4 {
+		t.Fatalf("Up from visual column 4 must move to previous wrapped row; cursor=%d", m.cursor)
+	}
+	press(m, tea.KeyDown)
+	if m.cursor != 10 {
+		t.Fatalf("Down must return to the same column on the next wrapped row; cursor=%d", m.cursor)
 	}
 }
 

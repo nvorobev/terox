@@ -53,6 +53,20 @@ func TestSuggestionsSuppressInStringOrComment(t *testing.T) {
 	}
 }
 
+func TestQuitCompletionShowsCanonicalCommandOnly(t *testing.T) {
+	c := testCompleter()
+	if len(metaCommands) < 2 || metaCommands[0] != "\\q" || metaCommands[1] != "\\quit" {
+		t.Fatalf("exit commands must be first in completion; got %q", metaCommands)
+	}
+	subs, replace := c.suggestions("\\q", len("\\q"))
+	if replace != len([]rune("\\q")) {
+		t.Fatalf("unexpected replacement length: got %d", replace)
+	}
+	if len(subs) != 1 || subs[0] != "uit" {
+		t.Fatalf("\\q must complete only to \\quit; got %q", subs)
+	}
+}
+
 func TestSuggestionsCreateTableNoExistingRelations(t *testing.T) {
 	c := testCompleter()
 	if subs, _ := c.suggestions("create table ", len("create table ")); len(subs) != 0 {

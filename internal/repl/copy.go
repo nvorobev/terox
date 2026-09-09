@@ -265,12 +265,6 @@ func (r *REPL) doCopy(raw string) error {
 	} else {
 		fmt.Fprintln(r.out, "  note: no migration role/timeout configured — loading under the connection role")
 	}
-	if r.writeApprove {
-		if strings.TrimSpace(r.readLine("type 'yes' to load: ")) != "yes" {
-			fmt.Fprintln(r.out, "cancelled")
-			return nil
-		}
-	}
 	ctx, cancel := interruptible()
 	defer cancel()
 	cctx, c2 := contextWithOptionalTimeout(ctx, time.Duration(r.cfg.MigrationTimeout))

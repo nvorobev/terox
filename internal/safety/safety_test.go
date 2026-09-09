@@ -79,7 +79,7 @@ func TestIsWriteSideEffectsAndSelectWrites(t *testing.T) {
 
 func TestAllowlistUnknownLeadingKeyword(t *testing.T) {
 	// Модель allowlist: любое ведущее ключевое слово, не доказуемо read-only,
-	// считается потенциальной записью и требует подтверждения.
+	// считается потенциальной записью и требует включённого write-режима.
 	writes := []string{
 		"LOAD '/tmp/lib.so'",
 		"load 'plugin'",
@@ -182,7 +182,7 @@ func TestIsUnqualifiedWrite(t *testing.T) {
 
 // TestExplainAnalyzeUnqualifiedWrite: EXPLAIN ANALYZE РЕАЛЬНО выполняет вложенный
 // запрос, поэтому безусловный DML под ним должен требовать усиленного
-// подтверждения (RiskUnqualifiedWrite), а не обычного. Обычный EXPLAIN (без
+// риска (RiskUnqualifiedWrite), а не обычного. Обычный EXPLAIN (без
 // ANALYZE) ничего не исполняет и остаётся read-only.
 func TestExplainAnalyzeUnqualifiedWrite(t *testing.T) {
 	unqualified := []string{
@@ -422,7 +422,7 @@ func TestPgFileSideEffects(t *testing.T) {
 }
 
 // TestIsUnqualifiedWriteDataModifyingCTE проверяет: DELETE/UPDATE по всем строкам
-// внутри тела CTE запускает строгое подтверждение, даже если завершающий оператор —
+// внутри тела CTE получает повышенный риск, даже если завершающий оператор —
 // безобидный SELECT.
 func TestIsUnqualifiedWriteDataModifyingCTE(t *testing.T) {
 	unqualified := []string{

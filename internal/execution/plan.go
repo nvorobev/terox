@@ -2,12 +2,11 @@ package execution
 
 // ExecutionPlanner (аудит 4.1/4.2): единый слой ПРИНЯТИЯ РЕШЕНИЯ об исполнении.
 // Главный архитектурный инвариант аудита — UI НЕ решает сам, можно ли выполнить
-// SQL и какое подтверждение спросить. Раньше эта цепочка (write → нужен ли режим
+// SQL. Раньше эта цепочка (write → нужен ли режим
 // записи → не несёт ли тело своё BEGIN/COMMIT/SET ROLE → нет ли session-scoped
-// состояния, переживающего COMMIT обёртки → какое подтверждение) была размазана
+// состояния, переживающего COMMIT обёртки) была размазана
 // по `repl.runStatement`. Теперь её владелец — `Plan(Request) Plan`, а REPL,
-// headless и будущий API лишь ПОДЧИНЯЮТСЯ плану: рендерят отказ, спрашивают ровно
-// то подтверждение, которое план потребовал, и исполняют.
+// headless и будущий API лишь ПОДЧИНЯЮТСЯ плану: рендерят отказ и исполняют.
 //
 // Этот файл — слой решения (risk/session/transaction policy). Timeout- и
 // fan-out-policy уже реализованы ниже по стеку (`execWrite`/`cluster`) и здесь не
@@ -19,7 +18,7 @@ import (
 )
 
 // Коды отказа — машиночитаемая причина, по которой запрос не исполняется до
-// каких-либо подтверждений. UI выбирает по коду способ рендера (детальную
+// выполнения. UI выбирает по коду способ рендера (детальную
 // справку), а не парсит текст.
 const (
 	// RefuseReadOnly — это запись, а режим записи (\write on) выключен.
@@ -31,19 +30,6 @@ const (
 	// LISTEN, PREPARE, cursor, session advisory lock, DISCARD) пережила бы COMMIT
 	// обёртки и при transaction pooling утекла бы следующему клиенту.
 	RefuseSessionState = "session-state"
-)
-
-// ConfirmLevel — требуемая сила подтверждения перед записью.
-type ConfirmLevel int
-
-const (
-	// ConfirmNone — чтение: подтверждение не требуется.
-	ConfirmNone ConfirmLevel = iota
-	// ConfirmWrite — обычная запись (есть WHERE / конкретная цель).
-	ConfirmWrite
-	// ConfirmUnqualified — безусловная запись (UPDATE/DELETE без WHERE верхнего
-	// уровня, TRUNCATE): усиленный барьер подтверждения.
-	ConfirmUnqualified
 )
 
 // Refusal — отказ исполнить запрос: машиночитаемый код + дефолтное пояснение.
@@ -61,15 +47,13 @@ type Request struct {
 // Plan — решение планировщика по запросу. UI обязан ему подчиняться.
 //
 //   - Refusal != nil  → не исполнять; показать причину по Refusal.Code.
-//   - IsWrite == false → чтение (execRead); подтверждение не требуется.
-//   - IsWrite == true  → запись; перед execWrite показать Warnings и спросить
-//     подтверждение уровня Confirm (если включён writeApprove).
+//   - IsWrite == false → чтение (execRead).
+//   - IsWrite == true  → запись; перед execWrite показать Warnings.
 type Plan struct {
 	Decision safety.Decision // уровень риска и причины (для объяснения)
 	IsWrite  bool
-	Refusal  *Refusal     // != nil → запрос отклонён до исполнения
-	Confirm  ConfirmLevel // требуемое подтверждение перед записью
-	Warnings []string     // предупреждения перед записью (напр. волатильная функция)
+	Refusal  *Refusal // != nil → запрос отклонён до исполнения
+	Warnings []string // предупреждения перед записью (напр. волатильная функция)
 }
 
 // Refused сообщает, отклонён ли запрос до исполнения.
@@ -81,8 +65,8 @@ func (p Plan) Refused() bool { return p.Refusal != nil }
 type Planner struct{}
 
 // Plan строит план исполнения для одного запроса. Это ЕДИНЫЙ источник истины
-// решения read-vs-write / refuse / confirm; порядок проверок повторяет защитный
-// конвейер записи (режим записи → tx-control → session-state → подтверждение).
+// решения read-vs-write / refuse; порядок проверок повторяет защитный
+// конвейер записи (режим записи → tx-control → session-state).
 func (Planner) Plan(req Request) Plan {
 	d := safety.Classify(req.SQL)
 	p := Plan{Decision: d, IsWrite: d.Write}
@@ -116,11 +100,6 @@ func (Planner) Plan(req Request) Plan {
 	// (в скрипте может быть несколько волатильных функций).
 	if d.Level == safety.RiskVolatileSideEffect && len(d.Reasons) > 0 {
 		p.Warnings = append(p.Warnings, d.Reasons...)
-	}
-	if d.Unqualified {
-		p.Confirm = ConfirmUnqualified
-	} else {
-		p.Confirm = ConfirmWrite
 	}
 	return p
 }
