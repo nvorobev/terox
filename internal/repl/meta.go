@@ -106,6 +106,9 @@ func (r *REPL) bindStorage(service, storage string) error {
 	if err != nil {
 		return err
 	}
+	if err := r.switchHistory(service); err != nil {
+		return fmt.Errorf("switch history to service %q: %w", service, err)
+	}
 	switched := r.storage != "" && (r.service != service || r.storage != storage)
 	r.service = service
 	r.storage = storage
@@ -147,6 +150,11 @@ func (r *REPL) snapshotContext() ctxSnapshot {
 }
 
 func (r *REPL) restoreContext(s ctxSnapshot) {
+	if s.service != "" && s.service != r.histService {
+		if err := r.switchHistory(s.service); err != nil {
+			fmt.Fprintf(r.out, "warning: could not restore history for service %s: %v\n", s.service, err)
+		}
+	}
 	r.service, r.storage, r.targetLabel = s.service, s.storage, s.targetLabel
 	r.shards, r.targets, r.prod = s.shards, s.targets, s.prod
 	r.migrationRole = s.migrationRole

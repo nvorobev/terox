@@ -82,7 +82,7 @@ var helpEntries = []helpEntry{
 	{[]string{"queries"}, "Saved queries", "\\queries", "List saved queries.", nil, ""},
 	{[]string{"unsave"}, "Saved queries", "\\unsave <name>", "Delete a saved query.", nil, ""},
 
-	{[]string{"h", "history"}, "History & misc", "\\h", "History hint (Up/Down to browse, Ctrl-R to search).", nil, ""},
+	{[]string{"h", "history"}, "History & misc", "\\h", "History for the current service (Up/Down to browse, Ctrl-R to search). Each service uses its own ~/.config/terox/history-<service> file.", nil, ""},
 	{[]string{"help", "?"}, "History & misc", "\\help [command]", "This help. With a command, shows its syntax, examples and risks.", []string{"\\help explain", "\\help write"}, ""},
 	{[]string{"quit", "q"}, "History & misc", "\\quit", "Quit (\\q remains accepted as a shortcut).", nil, ""},
 }

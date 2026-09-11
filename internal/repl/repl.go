@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -45,8 +46,10 @@ type REPL struct {
 	useTeaEditor bool
 	// history — история строк в памяти для редактора bubbletea (заполняется из
 	// файла истории readline; пополняется при отправке).
-	history  []string
-	histPath string // файл истории readline, читается также tea-редактором
+	history     []string
+	histDir     string // каталог файлов истории
+	histPath    string // история текущего сервиса, читается readline и tea
+	histService string // сервис, которому принадлежит histPath
 	// historyOff отключает запись истории на эту сессию (\history off): ни диск,
 	// ни память не пополняются, пока не включат обратно (\history on).
 	historyOff bool
@@ -201,7 +204,8 @@ func New(cfg *config.Config) (*REPL, error) {
 	r.comp = comp
 	rl.Config.AutoComplete = comp
 	rl.Config.Painter = &painter{r: r, comp: comp}
-	r.histPath = histPath
+	r.histDir = filepath.Dir(histPath)
+	r.histPath = histPath // временный legacy-файл до выбора сервиса
 	// Выбор редактора: TEROX_EDITOR важнее конфига, конфиг важнее значения по
 	// умолчанию. По умолчанию — редактор "tea" с живым дополнением; для
 	// классического выбирают "readline" (env, конфиг или \editor).
@@ -214,7 +218,6 @@ func New(cfg *config.Config) (*REPL, error) {
 	}
 	if choice == "tea" {
 		r.useTeaEditor = true
-		r.history = loadHistoryLines(histPath)
 	}
 	return r, nil
 }
@@ -900,6 +903,50 @@ func historyPath() (string, error) {
 	return hist, nil
 }
 
+// serviceHistoryPath возвращает отдельный приватный файл истории для сервиса.
+// PathEscape сохраняет обычные имена читаемыми (history-item), но не позволяет
+// имени сервиса создать вложенный путь или выйти из каталога истории.
+func serviceHistoryPath(dir, service string) (string, error) {
+	if dir == "" || strings.TrimSpace(service) == "" {
+		return "", fmt.Errorf("history service is empty")
+	}
+	path := filepath.Join(dir, "history-"+url.PathEscape(service))
+	if f, err := os.OpenFile(path, os.O_CREATE, 0o600); err != nil {
+		return "", err
+	} else if err := f.Close(); err != nil {
+		return "", err
+	}
+	if err := os.Chmod(path, 0o600); err != nil {
+		return "", err
+	}
+	return path, nil
+}
+
+// switchHistory переключает readline и tea на историю выбранного сервиса.
+// Storage и shard внутри одного сервиса продолжают использовать тот же файл.
+func (r *REPL) switchHistory(service string) error {
+	if r.histDir == "" || service == "" || r.histService == service {
+		return nil
+	}
+	path, err := serviceHistoryPath(r.histDir, service)
+	if err != nil {
+		return err
+	}
+	if r.rl != nil {
+		cfg := r.rl.Config.Clone()
+		cfg.HistoryFile = path
+		r.rl.SetConfig(cfg)
+	}
+	r.histPath = path
+	r.histService = service
+	if r.useTeaEditor {
+		r.history = loadHistoryLines(path)
+	} else {
+		r.history = nil
+	}
+	return nil
+}
+
 // recordHistory — ЕДИНСТВЕННАЯ точка, через которую что-либо попадает в историю.
 // Сохраняет завершённый оператор в дисковую (readline) и, для tea-редактора, в
 // in-memory историю, но НИКОГДА — оператор, похожий на содержащий секрет
@@ -938,7 +985,7 @@ func (r *REPL) runHistory(args []string) {
 		if r.historyOff {
 			state = "off"
 		}
-		fmt.Fprintf(r.out, "history recording: %s. Up/Down to navigate, Ctrl-R to search.\n", state)
+		fmt.Fprintf(r.out, "history recording: %s for service %s. Up/Down to navigate, Ctrl-R to search.\n", state, r.service)
 		fmt.Fprintln(r.out, "  \\history clear   wipe stored history (disk + this session)")
 		fmt.Fprintln(r.out, "  \\history off|on  stop/resume recording for this session")
 	case "clear":

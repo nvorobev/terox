@@ -4,10 +4,64 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"terox/internal/config"
 )
+
+func TestServiceHistoryPathIsPrivateAndCannotEscapeDirectory(t *testing.T) {
+	dir := t.TempDir()
+	path, err := serviceHistoryPath(dir, "item/../../other")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if filepath.Dir(path) != dir {
+		t.Fatalf("service history escaped its directory: %s", path)
+	}
+	if !strings.HasPrefix(filepath.Base(path), "history-item") {
+		t.Fatalf("unexpected service history name: %s", path)
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := info.Mode().Perm(); got != 0o600 {
+		t.Fatalf("history mode = %o, want 600", got)
+	}
+}
+
+func TestSwitchHistorySeparatesServices(t *testing.T) {
+	dir := t.TempDir()
+	itemPath, err := serviceHistoryPath(dir, "item")
+	if err != nil {
+		t.Fatal(err)
+	}
+	otherPath, err := serviceHistoryPath(dir, "other")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(itemPath, []byte("select item;\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(otherPath, []byte("select other;\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	r := &REPL{histDir: dir, useTeaEditor: true}
+	if err := r.switchHistory("item"); err != nil {
+		t.Fatal(err)
+	}
+	if r.histPath != itemPath || len(r.history) != 1 || r.history[0] != "select item;" {
+		t.Fatalf("item history not loaded: path=%q history=%v", r.histPath, r.history)
+	}
+	if err := r.switchHistory("other"); err != nil {
+		t.Fatal(err)
+	}
+	if r.histPath != otherPath || len(r.history) != 1 || r.history[0] != "select other;" {
+		t.Fatalf("other history not loaded: path=%q history=%v", r.histPath, r.history)
+	}
+}
 
 // TestRecordHistorySkipsSecrets: утверждение с учёткой не попадает ни в память
 // (tea), ни в файл истории.
